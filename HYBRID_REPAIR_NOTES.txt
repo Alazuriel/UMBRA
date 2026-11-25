@@ -1,0 +1,31 @@
+UMBRA AMD HYBRID DEXNOM v0.2 - UMBRA-main compatibility repair
+AI-assisted source integration, 2026-11-25.
+
+Input: the fresh UMBRA-main archive, whose runtime source matches the local
+working snapshot. Original source and older build are retained separately.
+
+Applied: P2 conditional masks, anisotropic samplers, native mesh I/O,
+scalar quadmask, helper-lane first reads, FP16 interpolation modifiers;
+P1 concurrent-title refresh plus view write marks and bitmap selection;
+all eleven pinned JoshuuDev stages; Belobug pixel quads and independent
+screen-pass scheduling; both normal DexNom shader fixes; launcher,
+shader precompilation, optional disk cache.
+
+P1 compatibility: the existing fork uses an offset-addressed snapshot and
+relay/card-copy API, not upstream Tracked/Snapshot segments. The port keeps
+the snapshot byte merge to preserve concurrent title writes, and uses
+shader-written page bits to select comparisons. It does not import the
+incompatible lazy guard/saved-page API. Therefore upstream's elimination
+of snapshot allocations is NOT claimed. GPU card hashing, relay and
+in-place paths retain their native copy-back mechanisms. The post-copy
+self-save issue addressed by upstream 940d32f does not arise in this
+snapshot-only port (there is no armed-page save callback).
+
+The Belobug scheduler adapts to the current JoshuuDev SPENTS layout and
+retains the separate graphics/compute loading budgets and slow-driver gate.
+No RT/hoist experimental deltas are enabled. No shaders or draws are
+skipped to make the integration pass. Superseded local descriptor-zero and
+relaxed-f16 diagnostic fallbacks have been removed.
+
+This document describes the original integration. See the README for later
+local observations and the status of the current public snapshot.

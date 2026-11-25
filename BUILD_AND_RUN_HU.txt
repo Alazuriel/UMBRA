@@ -1,0 +1,11 @@
+A repó gyökerében futtasd PowerShellből.
+
+cargo build --release -p victory
+if ($LASTEXITCODE -eq 0) {
+    powershell -NoProfile -ExecutionPolicy Bypass -File .\RUN_UMBRA_HYBRID.ps1
+}
+
+Az indító első alkalommal bekéri a saját játékpéldányod futtatható fájlját,
+majd helyben megjegyzi az útvonalat. A -GameExe kapcsolóval megadhatod közvetlenül.
+A -CacheMode értékei: warm (előfordítás), lazy (igény szerint) és off (kikapcsolva).
+A 720p a kért megjelenítési mód. A játék belső renderfelbontása eltérhet.

@@ -1,0 +1,473 @@
+// UMBRA_SHADER_COMPILER_V01
+//! Translated shaders kept on disk (decision 0003): under the configured
+//! cache folder, keyed by the container's content and by the VIctory build
+//! that translated it (the BLAKE3 of the translator's sources), so a changed
+//! translator never serves an old translation and one that did not change
+//! keeps its own through a rebuild. Entries go through
+//! `victory-pipeline`'s content-addressed cache, which writes them
+//! atomically; an entry that does not read back is translated again.
+//!
+//! The entry is our own encoding of [`HostShader`]: a field added to it
+//! must be added to `encode` and `decode` too (entries of older builds
+//! are ignored anyway).
+
+use std::path::PathBuf;
+use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use victory_pipeline::{Cache, Converter};
+use victory_shader::emit::{HostShader, StaticSampler, UserData};
+use victory_shader::resource::RootIndexedView;
+use victory_shader::{HwStage, RootType};
+
+static CACHE: OnceLock<Cache> = OnceLock::new();
+static HITS: AtomicU64 = AtomicU64::new(0);
+static MISSES: AtomicU64 = AtomicU64::new(0);
+
+/// Keeps translated shaders in `dir` from now on.
+pub fn use_shader_cache(dir: PathBuf) {
+    match Cache::open(dir) {
+        Ok(cache) => {
+            let _ = CACHE.set(cache);
+        }
+        Err(e) => tracing::warn!(error = %e, "no shader cache"),
+    }
+}
+
+/// Shaders found in the cache and translated since the start.
+pub(crate) fn counts() -> (u64, u64) {
+    (HITS.load(Ordering::Relaxed), MISSES.load(Ordering::Relaxed))
+}
+
+/// What identifies this translator: the BLAKE3 of its sources, of this
+/// file (the entries' encoding) and of the translation settings it runs
+/// with (the loop limit, which a diagnostics build can change at run time,
+/// and what the host's device said).
+fn build() -> [u8; 32] {
+    static BUILD: OnceLock<blake3::Hasher> = OnceLock::new();
+    let mut hash = BUILD.get_or_init(|| {
+        let limit = victory_shader::emit::loop_limit();
+        if limit != victory_shader::emit::DEFAULT_LOOP_LIMIT {
+            tracing::warn!(
+                limit,
+                "VICTORY_SHADER_LOOP_LIMIT: translated loops stop sooner"
+            );
+        }
+        let mut hash = blake3::Hasher::new();
+        for source in victory_shader::sources().iter().copied().chain([include_str!("shader_cache.rs")]) {
+            hash.update(&(source.len() as u64).to_le_bytes());
+            hash.update(source.as_bytes());
+        }
+        hash.update(env!("CARGO_PKG_VERSION").as_bytes());
+        hash.update(&[u8::from(cfg!(feature = "diagnostics"))]);
+        for n in [
+            limit,
+            victory_shader::emit::host_max_wave(),
+            // Which group barriers wait is part of the translation too.
+            u32::from(victory_shader::emit::group_sync()),
+            // And which clean-up passes ran over the translated code.
+            victory_shader::emit::shader_opt(),
+        ] {
+            hash.update(&n.to_le_bytes());
+        }
+        // So are the switches that pick the form of a wave64 program:
+        // without them here a run with `VICTORY_WAVE_WIDE=0` was served
+        // the translations an earlier run had cached with the switch unset.
+        for name in [
+            "VICTORY_WAVE_WIDE",
+            "VICTORY_WAVE_DEEP_SKIPS",
+            "VICTORY_WAVE_OWN_BITS",
+            "VICTORY_WAVE_LOCAL",
+            "VICTORY_F16_NEAREST",
+            "VICTORY_STRICT_JOINS",
+            "VICTORY_MESH_OUTPUT_STRICT",
+        ] {
+            hash.update(name.as_bytes());
+            hash.update(b"=");
+            if let Some(value) = std::env::var_os(name) {
+                hash.update(value.as_encoded_bytes());
+            }
+            hash.update(&[0]);
+        }
+        hash
+    }).clone();
+    // The host can lower this limit when it makes the title's heap.
+    hash.update(&victory_shader::emit::view_heap_limit().to_le_bytes());
+    *hash.finalize().as_bytes()
+}
+
+/// The translation of a console shader container, from the cache when
+/// there is one.
+pub(crate) fn host_shader(container: &[u8]) -> Result<HostShader, String> {
+    load_or_translate(container, false)
+}
+
+fn load_or_translate(container: &[u8], require_disk: bool) -> Result<HostShader, String> {
+    // Keep the limit stable from the cache lookup through any translation.
+    let _heap_limit = crate::descriptor::host::shader_view_limit();
+    let translate = |c: &[u8]| victory_shader::emit::translate_with(c, victory_shader::emit::Options { view_marks: true }).map_err(|e| e.to_string());
+    match CACHE.get() {
+        Some(cache) => cached(cache, &build(), container, translate, require_disk),
+        None if require_disk => Err("shader cache is not initialized".to_owned()),
+        None => translate(container),
+    }
+}
+
+/// Retains a new translation for the caller even if publishing it fails.
+struct Translate<F> {
+    translate: F,
+    result: OnceLock<Result<HostShader, String>>,
+}
+
+impl<F: Fn(&[u8]) -> Result<HostShader, String> + Send + Sync> Converter for Translate<F> {
+    fn id(&self) -> &'static str {
+        "shader.dxil"
+    }
+    fn version(&self) -> u32 {
+        // The build fingerprint in the input does the versioning.
+        1
+    }
+    fn convert(&self, input: &[u8]) -> anyhow::Result<Vec<u8>> {
+        let shader = self.result.get_or_init(|| (self.translate)(&input[32..]))
+            .as_ref()
+            .map_err(|e| anyhow::Error::msg(e.clone()))?;
+        Ok(encode(shader))
+    }
+}
+
+fn cached(
+    cache: &Cache,
+    build: &[u8; 32],
+    container: &[u8],
+    translate: impl Fn(&[u8]) -> Result<HostShader, String> + Send + Sync,
+    require_disk: bool,
+) -> Result<HostShader, String> {
+    let input = [&build[..], container].concat();
+    let converter = Translate {
+        translate,
+        result: OnceLock::new(),
+    };
+    for _ in 0..2 {
+        let path = cache.get_or_convert(&converter, &input);
+        if converter.result.get().is_some() {
+            let shader = converter.result.into_inner().expect("translation ran")?;
+            match path {
+                Ok(path) => tracing::debug!(path = %path.display(), "shader translated and cached"),
+                Err(error) if require_disk => return Err(format!("saving shader cache entry: {error:#}")),
+                Err(error) => tracing::debug!(%error, "using a translation that could not be saved"),
+            }
+            MISSES.fetch_add(1, Ordering::Relaxed);
+            return Ok(shader);
+        }
+        let path = match path {
+            Ok(path) => path,
+            Err(error) if require_disk => return Err(format!("accessing shader cache: {error:#}")),
+            Err(error) => {
+                tracing::debug!(%error, "shader cache unavailable; using the translator");
+                break;
+            }
+        };
+        if let Some(shader) = std::fs::read(&path).ok().and_then(|b| decode(&b)) {
+            HITS.fetch_add(1, Ordering::Relaxed);
+            tracing::debug!(path = %path.display(), "shader from the cache");
+            return Ok(shader);
+        }
+        tracing::debug!(path = %path.display(), "invalid shader cache entry; translating again");
+        let _ = std::fs::remove_file(&path);
+    }
+    if require_disk {
+        return Err("shader cache entry could not be repaired".to_owned());
+    }
+    let shader = (converter.translate)(container)?;
+    MISSES.fetch_add(1, Ordering::Relaxed);
+    Ok(shader)
+}
+
+const MAGIC: &[u8; 4] = b"VSH2";
+const STAGES: [HwStage; 8] = [
+    HwStage::Ls,
+    HwStage::Hs,
+    HwStage::Es,
+    HwStage::Gs,
+    HwStage::Vs,
+    HwStage::Ps,
+    HwStage::Ms,
+    HwStage::Cs,
+];
+
+fn root_code(r: RootType) -> u32 {
+    match r {
+        RootType::Constants => 0,
+        RootType::Descriptor => 1,
+        RootType::Table => 2,
+        RootType::ImmediateSampler => 3,
+        RootType::ResourceHeap => 4,
+        RootType::SamplerHeap => 5,
+        RootType::Other(x) => 6 + x,
+    }
+}
+
+fn root_type(code: u32) -> RootType {
+    match code {
+        0 => RootType::Constants,
+        1 => RootType::Descriptor,
+        2 => RootType::Table,
+        3 => RootType::ImmediateSampler,
+        4 => RootType::ResourceHeap,
+        5 => RootType::SamplerHeap,
+        x => RootType::Other(x - 6),
+    }
+}
+
+/// Little-endian words and length-prefixed lists.
+fn encode(s: &HostShader) -> Vec<u8> {
+    let mut out = MAGIC.to_vec();
+    let word = |out: &mut Vec<u8>, v: u32| out.extend(v.to_le_bytes());
+    let stage = STAGES.iter().position(|&x| x == s.stage).unwrap_or(0) as u32;
+    word(&mut out, stage);
+    word(&mut out, s.dxil.len() as u32);
+    out.extend(&s.dxil);
+    word(&mut out, s.user_data.len() as u32);
+    for u in &s.user_data {
+        for v in [u.index, u32::from(u.slot), root_code(u.root), u.dword] {
+            word(&mut out, v);
+        }
+    }
+    word(&mut out, s.samplers.len() as u32);
+    for sampler in &s.samplers {
+        for &v in sampler {
+            word(&mut out, v);
+        }
+    }
+    word(&mut out, s.static_samplers.len() as u32);
+    for t in &s.static_samplers {
+        let [u, v, w] = t.address;
+        let words = [
+            t.filter,
+            u,
+            v,
+            w,
+            t.mip_lod_bias.to_bits(),
+            t.max_anisotropy,
+            t.comparison,
+            t.border,
+            t.min_lod.to_bits(),
+            t.max_lod.to_bits(),
+        ];
+        for v in words {
+            word(&mut out, v);
+        }
+    }
+    for slots in [&s.root_cbvs, &s.root_srvs, &s.root_uavs] {
+        word(&mut out, slots.len() as u32);
+        out.extend(slots);
+    }
+    word(&mut out, s.root_indexed_views.len() as u32);
+    for view in &s.root_indexed_views {
+        for value in [
+            u32::from(view.table_slot),
+            u32::from(view.constant_slot),
+            view.constant_dword,
+            view.byte_offset,
+            u32::from(view.shift),
+        ] {
+            word(&mut out, value);
+        }
+    }
+    word(&mut out, u32::from(s.view_marks));
+    let checksum = blake3::hash(&out);
+    out.extend(checksum.as_bytes());
+    out
+}
+
+fn decode(bytes: &[u8]) -> Option<HostShader> {
+    struct Reader<'a>(&'a [u8]);
+    impl<'a> Reader<'a> {
+        fn take(&mut self, n: usize) -> Option<&'a [u8]> {
+            let (head, rest) = self.0.split_at_checked(n)?;
+            self.0 = rest;
+            Some(head)
+        }
+        fn word(&mut self) -> Option<u32> {
+            Some(u32::from_le_bytes(self.take(4)?.try_into().ok()?))
+        }
+        fn list(&mut self) -> Option<Vec<u8>> {
+            let n = self.word()? as usize;
+            Some(self.take(n)?.to_vec())
+        }
+    }
+    let (payload, checksum) = bytes.split_at_checked(bytes.len().checked_sub(blake3::OUT_LEN)?)?;
+    if blake3::hash(payload).as_bytes() != checksum {
+        return None;
+    }
+    let mut r = Reader(payload);
+    if r.take(4)? != MAGIC {
+        return None;
+    }
+    let stage = *STAGES.get(r.word()? as usize)?;
+    let dxil = r.list()?;
+    let n = r.word()? as usize;
+    let mut user_data = Vec::with_capacity(n.min(256));
+    for _ in 0..n {
+        user_data.push(UserData {
+            index: r.word()?,
+            slot: u8::try_from(r.word()?).ok()?,
+            root: root_type(r.word()?),
+            dword: r.word()?,
+        });
+    }
+    let n = r.word()? as usize;
+    let mut samplers = Vec::with_capacity(n.min(256));
+    for _ in 0..n {
+        samplers.push([r.word()?, r.word()?, r.word()?, r.word()?]);
+    }
+    let n = r.word()? as usize;
+    let mut static_samplers = Vec::with_capacity(n.min(256));
+    for _ in 0..n {
+        static_samplers.push(StaticSampler {
+            filter: r.word()?,
+            address: [r.word()?, r.word()?, r.word()?],
+            mip_lod_bias: f32::from_bits(r.word()?),
+            max_anisotropy: r.word()?,
+            comparison: r.word()?,
+            border: r.word()?,
+            min_lod: f32::from_bits(r.word()?),
+            max_lod: f32::from_bits(r.word()?),
+        });
+    }
+    let root_cbvs = r.list()?;
+    let root_srvs = r.list()?;
+    let root_uavs = r.list()?;
+    let n = r.word()? as usize;
+    let mut root_indexed_views = Vec::with_capacity(n.min(256));
+    for _ in 0..n {
+        root_indexed_views.push(RootIndexedView {
+            table_slot: u8::try_from(r.word()?).ok()?,
+            constant_slot: u8::try_from(r.word()?).ok()?,
+            constant_dword: r.word()?,
+            byte_offset: r.word()?,
+            shift: u8::try_from(r.word()?).ok().filter(|&s| s < 32)?,
+        });
+    }
+    let view_marks = r.word()? != 0;
+    r.0.is_empty().then_some(HostShader {
+        stage,
+        dxil,
+        user_data,
+        samplers,
+        static_samplers,
+        root_cbvs,
+        root_srvs,
+        root_uavs,
+        root_indexed_views,
+        view_marks,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn shader() -> HostShader {
+        HostShader {
+        view_marks: false,
+            stage: HwStage::Ps,
+            dxil: b"DXBC and the rest".to_vec(),
+            user_data: vec![UserData {
+                index: 8,
+                slot: 1,
+                root: RootType::Table,
+                dword: 0,
+            }],
+            samplers: vec![[0x400, 0xc0_0000, 0x18f0_0000, 0]],
+            static_samplers: vec![StaticSampler::from_words([
+                0x400,
+                0xc0_0000,
+                0x18f0_0000,
+                0,
+            ])],
+            root_cbvs: vec![2],
+            root_srvs: vec![0, 3],
+            root_uavs: vec![1],
+            root_indexed_views: vec![RootIndexedView {
+                table_slot: 1,
+                constant_slot: 2,
+                constant_dword: 3,
+                byte_offset: 32,
+                shift: 5,
+            }],
+        }
+    }
+
+    #[test]
+    fn translations_come_back_from_the_cache() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache::open(dir.path()).unwrap();
+        let build = [7u8; 32];
+        let container = b"a console container".as_slice();
+        let runs = AtomicU64::new(0);
+        let translate = |_: &[u8]| {
+            runs.fetch_add(1, Ordering::Relaxed);
+            Ok(shader())
+        };
+        assert_eq!(cached(&cache, &build, container, translate, true), Ok(shader()));
+        assert_eq!(cached(&cache, &build, container, translate, true), Ok(shader()));
+        assert_eq!(runs.load(Ordering::Relaxed), 1, "the second came from disk");
+
+        // Another build translates again.
+        assert_eq!(cached(&cache, &[8; 32], container, translate, true), Ok(shader()));
+        assert_eq!(runs.load(Ordering::Relaxed), 2);
+
+        // A damaged entry is a miss, translated and stored again.
+        for e in walk(dir.path()) {
+            std::fs::write(e, b"VSH1 broken").unwrap();
+        }
+        assert_eq!(cached(&cache, &build, container, translate, true), Ok(shader()));
+        assert_eq!(runs.load(Ordering::Relaxed), 3);
+        assert_eq!(cached(&cache, &build, container, translate, true), Ok(shader()));
+        assert_eq!(runs.load(Ordering::Relaxed), 3);
+
+        // Failures are not stored.
+        let fail = |_: &[u8]| Err::<HostShader, _>("unsupported".to_owned());
+        assert!(cached(&cache, &build, b"other", fail, true).is_err());
+    }
+
+    fn walk(dir: &std::path::Path) -> Vec<PathBuf> {
+        let mut files = Vec::new();
+        for e in std::fs::read_dir(dir).unwrap().flatten() {
+            if e.path().is_dir() {
+                files.extend(walk(&e.path()));
+            } else {
+                files.push(e.path());
+            }
+        }
+        files
+    }
+
+    #[test]
+    fn entries_round_trip_and_reject_damage() {
+        let bytes = encode(&shader());
+        assert_eq!(decode(&bytes), Some(shader()));
+        assert_eq!(decode(&bytes[..bytes.len() - 1]), None);
+        assert_eq!(decode(&[bytes.as_slice(), &[0]].concat()), None);
+        assert_eq!(decode(b"VSH0"), None);
+    }
+}
+
+/// UMBRA: initialize the exact runtime adapter and descriptor limits before
+/// filling the same on-disk cache the game uses. No guest code is executed.
+pub fn umbra_prepare(dir: &std::path::Path) -> Result<(), String> {
+    if crate::host::host().is_none() {
+        return Err("no runtime D3D12 adapter".to_owned());
+    }
+    let cache = Cache::open(dir).map_err(|e| format!("{e:#}"))?;
+    CACHE.set(cache).map_err(|_| "shader cache already initialized".to_owned())?;
+    Ok(())
+}
+
+/// Goes through the real runtime cache, including its serializer and keys.
+pub fn umbra_warm_one(container: &[u8]) -> Result<(), String> {
+    load_or_translate(container, true).map(|_| ())
+}
+
+pub fn umbra_counts() -> (u64, u64) { counts() }
