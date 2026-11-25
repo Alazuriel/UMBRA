@@ -8,9 +8,10 @@
 //! shader with its root signature inside), leaving the title's argument and
 //! count buffers untouched.
 //!
-//! When a count buffer is given, threads at or past `min(max, count)` return
-//! immediately without charging the list's budget or reading uninitialized
-//! tail slots. Each list has a budget (2^27 vertex instances or threads,
+//! For a counted call the clamp saves `min(max, count)` after the scratch
+//! records, so D3D12 reads the count and records from the same transitioned
+//! buffer. Inactive lanes never read the title's tail or charge the budget.
+//! Each list has a budget (2^27 vertex instances or threads,
 //! groups counted as 64 threads, mesh groups as 128): active records past it
 //! run empty, saturating without 32-bit wraparound so a list of thousands of
 //! garbage records cannot run for seconds either.
@@ -57,12 +58,21 @@ void main(uint3 id : SV_DispatchThreadID) {
     uint eff_count = records;
     bool ahead = (has_count & 2u) != 0;
     bool split = (has_count & 4u) != 0;
+    if (id.x >= records) return;
+    uint dst_at = id.x * stride;
     if ((has_count & 1u) != 0) {
         eff_count = min(eff_count, count_buf.Load(count_offset));
+        if (id.x == 0) {
+            dst_args.Store(records * stride, eff_count);
+        }
+        if (id.x >= eff_count) {
+            // If the source count changes while the clamp reads it,
+            // every record the saved count can reach is still harmless.
+            dst_args.Store3(dst_at, uint3(0, 0, 0));
+            return;
+        }
     }
-    if (id.x >= eff_count) return;
     uint src_at = args_offset + id.x * stride;
-    uint dst_at = id.x * stride;
     uint cost;
     uint2 draw_counts = uint2(0, 0);
     uint3 groups = uint3(0, 0, 0);
@@ -259,6 +269,7 @@ fn validate_layout(
 /// `kind` (PC argument numbering) `stride` bytes apart from `src` (and bounded
 /// by the 32-bit count in `count` when given) into a device-local scratch
 /// buffer, leaving that scratch buffer in `INDIRECT_ARGUMENT` at offset `0`.
+/// If there is a count, its copy follows the records at `records * stride`.
 /// Replaces the list's compute root signature and pipeline (callers bind
 /// theirs after). `None` if the clamp or alignment is not available.
 pub(crate) fn bound(
@@ -317,7 +328,11 @@ fn bound_as(
     owned: bool,
 ) -> Option<ID3D12Resource> {
     let bytes = validate_layout(spec, src.1, count.map(|(_, offset)| offset))?;
-    let scratch_bytes = if how == IN_PARTS { u64::from(SPLIT) * PART_BYTES } else { bytes };
+    let scratch_bytes = if how == IN_PARTS {
+        u64::from(SPLIT) * PART_BYTES
+    } else {
+        bytes + if count.is_some() { 4 } else { 0 }
+    };
     let (c, budget, dst) = (clamp()?, list.budget()?, list.indirect_scratch(scratch_bytes)?);
     let scoped = owned && scoped_clamp_barriers();
     // SAFETY: the command list owns the budget buffer through submission.
@@ -458,6 +473,18 @@ fn record_clamp_as(
         }
     }
     true
+}
+
+/// A reused window was returned to COMMON after its previous draw.
+pub(crate) fn reuse(list: &HostList, scratch: &ID3D12Resource) {
+    // SAFETY: an open list and a live scratch buffer in COMMON.
+    unsafe {
+        list.list.ResourceBarrier(&[transition(
+            scratch,
+            D3D12_RESOURCE_STATE_COMMON,
+            D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT,
+        )]);
+    }
 }
 
 /// After indirect execution (or if preparation failed after [`bound`]):
@@ -848,7 +875,8 @@ void main() {
         let (_budget_buf, budget_ptr, budget_gpu) = warp.shared_buffer(256);
         let (_hits_buf, hits_ptr, hits_gpu) = warp.shared_buffer(256);
         let (readback_buf, readback_ptr, _) = warp.shared_buffer((STRIDE * 8) as u64);
-        let dst_buf = warp.default_uav(u64::from(STRIDE) * u64::from(MAX));
+        let checked_count_offset = u64::from(STRIDE) * u64::from(MAX);
+        let dst_buf = warp.default_uav(checked_count_offset + 4);
         let sig = warp.signature(KIND_DISPATCH, STRIDE);
 
         // Fill the entire source buffer with non-zero sentinel bytes, then
@@ -925,8 +953,8 @@ void main() {
                 MAX,
                 &dst_buf,
                 0,
-                Some(&count_buf),
-                COUNT_OFFSET_1 as u64,
+                Some(&dst_buf),
+                checked_count_offset,
             );
         }
         done_on(&warp.list, &dst_buf);
@@ -970,8 +998,8 @@ void main() {
                 MAX,
                 &dst_buf,
                 0,
-                Some(&count_buf),
-                COUNT_OFFSET_2 as u64,
+                Some(&dst_buf),
+                checked_count_offset,
             );
         }
         done_on(&warp.list, &dst_buf);

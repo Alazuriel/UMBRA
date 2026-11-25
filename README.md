@@ -1,43 +1,122 @@
-# UMBRA Hybrid
+# VIctory fork (work in progress)
 
-UMBRA is an experimental, source-only Windows x64 fork of VIctory for Xbox Series compatibility. It runs the title from files you supply and translates RDNA2 GPU programs to DXIL for Direct3D 12. Use your own copy of the title. The project is unaffiliated with its developer and publisher.
+<!-- UMBRA_PRIVATE_SNAPSHOT_START -->
+## UMBRA development snapshot — 2026-11-25
 
-## What's working so far
+This **private development snapshot** contains locally modified compatibility-layer
+source code. It is not a playable release or a complete rendering implementation.
+The previous `gpu-feed + wide + wave` test gave the most promising scene output;
+subsequent experimental texture and presentation patches were rolled back after
+causing missing surfaces, flicker or increased latency. The snapshot reflects
+**the actual local working-tree files** at the time of publishing, not a claim
+that any particular experimental patch is stable.
 
-- The launcher starts the title and offers shader precompilation, on-demand caching, and a cache-off mode. The latest cache implementation validates saved entries and recompiles damaged ones. In a local warm-cache run before that revision, the launcher reused **25,741 translated shaders**. Direct3D 12 pipeline objects are a separate cache.
-- The opening cinematic and first playable scenes render, including character geometry and many world textures. The runtime includes fixes for mesh and pixel shaders, indirect work, streamed texture views, and intro-frame uploads.
-- The runtime includes changes to CPU-side buffer refresh, texture preparation, and GPU copy-back. The latest source includes parallel staging for independent textures and preserves an already displayed texture during a transient mapping miss. The performance and visual impact of those newest changes is still unverified in-game.
+### Captures from local testing
 
-## Local results and limits
+![Prison dormitory, experimental UMBRA rendering](docs/screenshots/umbra-prison-dorm-2026-11-25.jpg)
 
-On a Ryzen 5 5600X, Radeon RX 9060 XT, and 32 GB RAM using the Series X profile, steadier portions of one gameplay run took about **320–344 ms per frame (roughly 3 FPS)**. Texture streaming occasionally pushed frame times substantially higher. These are development measurements on one PC.
+![Bathroom and interior, experimental UMBRA rendering](docs/screenshots/umbra-prison-bathroom-2026-11-25.jpg)
 
-Rendering remains incomplete. Textures can flicker or arrive late, and material, lighting and depth issues remain. A later warm-cache run ended with DXGI device-hung error `0x887A0006`. Its cause is still under investigation. The default profile keeps ray tracing off. `-Resolution 720p` requests a display mode. The title can still render from a 4K source. This is a development snapshot.
+![Character and cinematic lighting, experimental UMBRA rendering](docs/screenshots/umbra-prison-cinematic-2026-11-25.jpg)
 
-## Build and launch
+### Current known limitations
 
-Use Windows x64, Rust with the pinned toolchain, the MSVC C++ build tools, Python 3 with Tk, and a Direct3D 12 GPU with Shader Model 6.6 and mesh shader support.
+- Slow world rendering (a few frames per second in these tests), high CPU-side
+  preparation and memory-copy costs, and RAM pressure.
+- Intermittently missing walls/textures, material/normal/depth artifacts, and
+  incomplete shader translation.
+- Startup-logo/cinematic flicker in some configurations.
+- The host may present a 4K-sized source even when the console display mode
+  reports 720p. A 720p presentation buffer does not prove 720p internal rendering.
+- Ray-traced indirect lighting is **not confirmed working**. Unstable BVH
+  experiments must remain disabled by default.
 
-```powershell
-cargo build --release -p victory
-.\RUN_UMBRA_HYBRID.ps1 -GpuSchedule safe -CacheMode warm
-```
+### Provenance and licensing
 
-Run these from the repository root. The launcher can prompt for your executable and remember its path locally. Pass `-GameExe` to supply it directly. `-CacheMode lazy` builds the cache during play.
+Built from the VIctory compatibility layer and subsequent community research.
+Preserve the existing VIctory/XCL credits and `LICENSE`. This snapshot is not
+an official release from the game's publisher and contains **no game binary,
+archives, extracted models, textures or shaders**. Images are user-provided
+captures stored privately for development reference; their depicted game
+content belongs to its original rights holders.
+<!-- UMBRA_PRIVATE_SNAPSHOT_END -->
 
-## Upstream and contributors
 
-- [Marvisak/VIctory](https://github.com/Marvisak/VIctory) is the base for the loader, runtime services, Direct3D 12 backend and RDNA2 shader translator. Credit goes to Marvisak and the VIctory contributors.
-- [JoshuuDev/victory-amd](https://github.com/joshuudev/victory-amd), [Belobug/VIctory-Belobug-AMD](https://github.com/Belobug/VIctory-Belobug-AMD), and [DexNom/VIctory](https://github.com/DexNom/VIctory) contributed the AMD-oriented patch series used in the Hybrid integration. See the [integration notes](HYBRID_REPAIR_NOTES.txt) for what was ported.
-- [vitutu1/victory-perf](https://github.com/vitutu1/victory-perf) supplied the GPU snapshot hash approach and the reference for scoped indirect-work barriers.
-- [xcl-dev/xcl](https://github.com/xcl-dev/xcl), originally by ivall and contributors, was a reference for runtime behavior. The corresponding changes were implemented in VIctory.
-- The UMBRA integration was AI-assisted. The base fork credits Claude Code, and the Hybrid work was also developed with OpenAI Codex.
+A work-in-progress fork of [VIctory](https://github.com/Marvisak/VIctory), a
+compatibility layer that runs an Xbox Series title natively on Windows from
+files the user supplies. This fork follows upstream
+`main` and adds fixes aimed at one goal: getting the game's world to render
+correctly and playably on one particular PC.
 
-UMBRA and its VIctory base are licensed under GPL-3.0-or-later. See [LICENSE](LICENSE) and the [asset policy](docs/asset-policy.md). Game files, images and generated caches stay local.
+**This repository contains no game files, code or assets.** You need your own
+copy of the game. It is not affiliated with or endorsed by the game's
+developer or publisher.
 
-## Upstream VIctory documentation
+## Credits
 
-The following section documents upstream VIctory and its earlier status.
+- **[VIctory](https://github.com/Marvisak/VIctory)** by Marvisak and its
+  contributors is the base of everything here: the loader, the runtime
+  services, the Direct3D 12 back end and the shader recompiler. Licensed
+  GPL-3.0-or-later; so is this fork. Upstream's history is kept intact below
+  the single commit that carries this fork's changes.
+- **[XCL](https://github.com/ivall/xcl)** by ivall and its contributors
+  (GPL-2.0-only) was used as a reference for how the same title behaves under
+  another layer. Fixes inspired by it were written anew in VIctory's code.
+- This fork's changes were developed with [Claude Code](https://claude.com/claude-code).
+
+## Status of this fork (2026-11-25)
+
+**Not playable yet: 2.5 to 4 frames per second, and shadowed areas are black.**
+Tested on one machine: Windows 11, Intel i7-14700KF, NVIDIA RTX 4070 12 GB,
+32 GB RAM. The Series X profile is used throughout.
+
+| Stage | State in this fork |
+|-------|--------------------|
+| Boot, menus, start screen | works, 30 fps (as upstream) |
+| Opening cutscene | plays from start to finish, in order, lit: title cards, credits cards, night and dusk shots |
+| Saves | the game autosaves a checkpoint and loads it again |
+| First gameplay scene (the prologue) | renders: characters, textures, sky, sunlit exterior; HUD, pause menu and pad input work |
+| Light in shadow | missing: the game's ray-traced bounce light and ray-traced lamp and sun shadows do not run yet, so anything the sun does not hit directly is black |
+| Frame rate in the world | 2-4 fps: 420-450 ms per frame by default, 240-350 ms with the newer switches (`VICTORY_RELAY=2`, or `VICTORY_LATE_WAIT=3 VICTORY_WIDE_BACK=1 VICTORY_CARD_BUFFERS_MIN_MB=1 VICTORY_CARD_BUFFERS_MB=1024`); it started at 3-6 seconds per frame |
+| Stability | no driver hang or device loss in normal runs (a hang introduced by the wave64 update was found and fixed: its barrier form for 64-lane programs is now off unless `VICTORY_WAVE_WIDE=1`) |
+
+### What this fork changed (summary)
+
+Rendering:
+- Meshlet culling read its scene buffers as the wrong kind of view, so the world drew almost nothing; fixed.
+- Per-draw descriptor tables could run out, after which draws used slots never made for them and the card hung; fixed.
+- Light packed by the game's compute shaders was read back through empty copies (sky, probes, fog); fixed for every mip level and layer.
+- The fog reconstruction, shadow-mask, hair, blend-shape skinning, fire and several material programs did not translate; fixed.
+- Gathers at a named mip level (with and without an offset) read level 0; fixed.
+- Implicit-level samples outside pixel shaders produced invalid DXIL in 730 compute programs; fixed.
+- Rectangle lists, depth and stencil twins for depth textures written by compute, texture read-backs.
+- Ray tracing, in progress and off by default: the game's own structure-builder programs translate, title memory can be read by raw address from shaders, the hardware ray/box and ray/triangle test is emulated in DXIL (checked against a reference on the GPU), and 59 of the 64 trace programs translate. Nothing is lit by it yet. See [docs/fork-ray-tracing.md](docs/fork-ray-tracing.md).
+
+Speed and memory:
+- Waits for memory values, write-watch queries and page queries no longer walk page tables per call.
+- Large title buffers get a copy in card memory, with shader writes found by hashing on the card.
+- Submissions can be sent ahead of the wait for the card (`VICTORY_LATE_WAIT`), with a relay thread that lands results as the card finishes (`VICTORY_RELAY`): in a first five-minute run the card's idle time behind the submitting thread fell from about 136 to 30 ms per frame.
+- Title memory can be opened as a graphics heap so that buffers are used in place instead of copied (`VICTORY_INPLACE`, first stage only; a probe confirmed the approach on the test GPU).
+- The bindless texture queue no longer uploads stale views; the view table no longer grows without bound; the pipeline library is mapped instead of read into memory.
+- An intermittent device loss was traced to the pipeline library file being replaced while mapped; fixed.
+
+- Translated shaders get clean-up passes over the finished module (dead code, constant folding, reuse of values, branch facts); the pack's host instruction count falls by about 43 %, worth about 20 ms of GPU time per frame on the test machine (`VICTORY_SHADER_OPT=0` turns them off).
+
+Most of the newer speed changes sit behind environment switches that are off
+by default (`VICTORY_LATE_WAIT`, `VICTORY_RELAY`, `VICTORY_WIDE_BACK`,
+`VICTORY_CARD_BUFFERS_MIN_MB`, `VICTORY_INPLACE`, `VICTORY_BVH_BUILDER`, ...).
+Each is described in a comment where it is read.
+
+### Known problems
+
+- Everything in shadow is black (see above).
+- The interior of the first gameplay room is sometimes not drawn after the cutscene hands over to gameplay.
+- Around 24 GB of memory is in use during play.
+- A few style lints are switched off for this fork in the workspace `Cargo.toml` until the newer code is tidied.
+- Many changes here are specific to this title and this GPU, and some are marked `shortcut:` in the code where they approximate what the console does.
+
+Everything below this line is upstream VIctory's own README, unchanged; its
+status section describes upstream, not this fork.
 
 ---
 

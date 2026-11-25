@@ -2373,6 +2373,9 @@ impl State {
         arguments: u64,
         count: Option<u64>,
     ) -> bool {
+        if max == 0 {
+            return true;
+        }
         // Skip before the argument clamp can mutate the indirect buffer.
         #[cfg(feature = "diagnostics")]
         if crate::pipeline::is_skipped(self.pipeline as This) {
@@ -2482,7 +2485,10 @@ impl State {
             .filter(|w| (offset - w.base) % u64::from(w.step) == 0 && (offset - w.base) / u64::from(w.step) < u64::from(w.records))
             .map(|w| (w.scratch.clone(), offset - w.base));
         let (bounded, at) = match hit {
-            Some(hit) => hit,
+            Some((scratch, offset)) => {
+                crate::indirect::reuse(list, &scratch);
+                (scratch, offset)
+            }
             None => {
                 // A record a short step after the last window's last one
                 // (the same step as that window's, if it had one): the
@@ -2549,6 +2555,7 @@ impl State {
             _ => false,
         };
         if !ran {
+            self.window = None;
             crate::indirect::done(list, &bounded);
             why("prepare failed");
             return false;
@@ -2576,8 +2583,9 @@ impl State {
                     max,
                     &bounded,
                     at,
-                    counter.as_ref().map(|(s, _)| &s.buffer),
-                    counter.as_ref().map_or(0, |(s, at)| s.offset(*at)),
+                    // The clamp appended the count to the same scratch buffer.
+                    counter.as_ref().map(|_| &bounded),
+                    counter.as_ref().map_or(0, |_| len),
                 )
             }
         };

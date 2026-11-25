@@ -92,3 +92,6 @@ Thumbs.db
 *.psd
 /docs/screenshots/
 /umbra_launcher/a/
+
+/umbra_launcher/artwork.png
+!/umbra_launcher/logo.png

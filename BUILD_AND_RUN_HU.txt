@@ -1,11 +1,23 @@
-A repó gyökerében futtasd PowerShellből.
+A vegleges forrast a felhasznalo forditja. A javitas nem futtat Cargo parancsot.
 
+PowerShell:
+Set-Location F:\UMBRA_FXC_LATEST
 cargo build --release -p victory
-if ($LASTEXITCODE -eq 0) {
-    powershell -NoProfile -ExecutionPolicy Bypass -File .\RUN_UMBRA_HYBRID.ps1
-}
+# Csak sikeres build utan:
+powershell -NoProfile -ExecutionPolicy Bypass -File .\RUN_UMBRA_HYBRID.ps1
 
-Az indító első alkalommal bekéri a saját játékpéldányod futtatható fájlját,
-majd helyben megjegyzi az útvonalat. A -GameExe kapcsolóval megadhatod közvetlenül.
-A -CacheMode értékei: warm (előfordítás), lazy (igény szerint) és off (kikapcsolva).
-A 720p a kért megjelenítési mód. A játék belső renderfelbontása eltérhet.
+A logoban a START gomb elinditja a shader eloforditast. Utana a jatek indul,
+vagy az indito a CONTINUE TO GAME gombot mutatja, ha nem tamogatott shader volt.
+A cache valaszthato: warm (eloforditas), lazy (igeny szerinti), off.
+
+Opcionális ellenorzesek, ugyanebbol a mappabol:
+cargo test -p victory-gpu view_mark -- --test-threads=1
+cargo test -p victory-gpu title_writes_under_a_busy_range -- --test-threads=1
+cargo test -p victory-shader --lib
+
+A regi v0.27 indito nem kell. A 720p a kijelzesi mod kerese; a torolt v0.27
+skalazojat es intro-hold funkciojat ez az indito nem allitja elerhetonek.
+RT es kiserleti GPU-atfedes alapertelmezetten kikapcsolva.
+
+A vegleges P1 portot az agent NEM forditotta es NEM futtatta GPU-n.
+Reszletek: HYBRID_REPAIR_NOTES.txt.

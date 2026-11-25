@@ -6,7 +6,7 @@ param(
  [ValidateSet('series-x','series-s')][string]$Console='series-x',
  [ValidateSet('warm','lazy','off')][string]$CacheMode='warm',
  [ValidateRange(1,64)][int]$Jobs=6,
- [string]$GameExe,
+ [string]$GameExe='F:\GTA6.Xbox.v1.0.2.1-CYBERLEEK\game_scarlett_master.exe',
  [switch]$NoHud,
  [switch]$Capped,
  [switch]$TextureNoWait,
@@ -18,7 +18,7 @@ $exe=Join-Path $root 'target\release\victory.exe'
 if (!(Test-Path -LiteralPath $exe)) {
  throw "Missing Hybrid release build. In $root run: cargo build --release -p victory"
 }
-if ($GameExe -and !(Test-Path -LiteralPath $GameExe -PathType Leaf)) { throw "Game executable missing: $GameExe" }
+if (!(Test-Path -LiteralPath $GameExe)) { throw "Game executable missing: $GameExe" }
 $reset=@(
  'VICTORY_RELAY','VICTORY_LATE_WAIT','VICTORY_LATE_WAITS','VICTORY_CARD_BUFFERS',
  'VICTORY_CARD_BUFFERS_MIN_MB','VICTORY_CARD_BUFFERS_MB','VICTORY_CARD_WINDOWS_MB',
@@ -43,7 +43,7 @@ try {
  foreach($key in $reset) { [Environment]::SetEnvironmentVariable($key,$null,'Process') }
  $sizes=@{'4k'='3840x2160';'1440p'='2560x1440';'1080p'='1920x1080';'900p'='1600x900';'720p'='1280x720'}
  $env:VICTORY_DISPLAY_MODE=$sizes[$Resolution]
- if ($GameExe) { $GameExe = (Resolve-Path -LiteralPath $GameExe).Path }
+ $env:VICTORY_GAME_DIR=Split-Path -Parent $GameExe
  $env:VICTORY_JOIN_COPIES='1'
  if($TextureNoWait) { $env:VICTORY_TEXTURE_NO_WAIT='1' }
  if($CopyMode -eq 'wide') { $env:VICTORY_WIDE_BACK='1' }
@@ -64,9 +64,7 @@ try {
  Write-Host "UMBRA AMD HYBRID DEXNOM v0.2 | $Mode | $CopyMode | $Resolution display | $Console | RT off | GPU schedule=$GpuSchedule | cache=$CacheMode | texture-no-wait=$($TextureNoWait.IsPresent)"
  Push-Location $root
  try {
-  $launcherArgs = @('--runtime', $exe, '--console', $Console, '--cache-mode', $CacheMode, '--jobs', $Jobs)
-  if ($GameExe) { $launcherArgs += @('--game-exe', $GameExe) }
-  & py -3 (Join-Path $root 'umbra_launcher\launcher.py') @launcherArgs
+  & py -3 (Join-Path $root 'umbra_launcher\launcher.py') --runtime $exe --game-exe $GameExe --console $Console --cache-mode $CacheMode --jobs $Jobs
   if($LASTEXITCODE -ne 0) { throw "Shader launcher exited with code $LASTEXITCODE" }
  } finally { Pop-Location }
 } finally {

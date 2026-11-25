@@ -33,6 +33,10 @@ const EXCEPTIONS: &[(&str, &str)] = &[(
     "crates/victory-formats/src/bcpack-tables.bin",
     "the BCPack format's constant tables: nothing decodes without them and they cannot be derived (owner's decision, 2026-11-23; docs/asset-policy.md)",
 ),
+    ("umbra_launcher/logo.png", "original UMBRA branding for the shader-cache launcher"),
+    ("docs/screenshots/umbra-prison-dorm-2026-11-25.jpg", "user-supplied image, allowed only in this private UMBRA development snapshot"),
+    ("docs/screenshots/umbra-prison-bathroom-2026-11-25.jpg", "user-supplied image, allowed only in this private UMBRA development snapshot"),
+    ("docs/screenshots/umbra-prison-cinematic-2026-11-25.jpg", "user-supplied image, allowed only in this private UMBRA development snapshot"),
 ];
 
 /// Signatures of formats that must never be committed.

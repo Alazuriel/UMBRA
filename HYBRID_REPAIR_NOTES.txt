@@ -8,7 +8,7 @@ Applied: P2 conditional masks, anisotropic samplers, native mesh I/O,
 scalar quadmask, helper-lane first reads, FP16 interpolation modifiers;
 P1 concurrent-title refresh plus view write marks and bitmap selection;
 all eleven pinned JoshuuDev stages; Belobug pixel quads and independent
-screen-pass scheduling; both normal DexNom shader fixes; launcher,
+screen-pass scheduling; both normal DexNom shader fixes; logo launcher,
 shader precompilation, optional disk cache.
 
 P1 compatibility: the existing fork uses an offset-addressed snapshot and
@@ -27,5 +27,7 @@ No RT/hoist experimental deltas are enabled. No shaders or draws are
 skipped to make the integration pass. Superseded local descriptor-zero and
 relaxed-f16 diagnostic fallbacks have been removed.
 
-This document describes the original integration. See the README for later
-local observations and the status of the current public snapshot.
+A cargo check passed BEFORE the final P1 ABI port. The user explicitly
+requested that subsequent Cargo build/check/test commands be run manually.
+The final source is NOT compile- or GPU-validated. Hand-written regression
+tests are included; no game shader, asset, or generated shader is bundled.

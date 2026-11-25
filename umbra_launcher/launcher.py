@@ -35,12 +35,30 @@ def command(runtime,exe,jobs,console):
 class App:
     def __init__(self,win,args):
         self.win=win; self.args=args; self.events=queue.Queue(); self.proc=None; self.cancelled=False; self.final=None; self.started=time.monotonic(); self.log=None
-        win.title('UMBRA / Launcher'); win.configure(bg=BG); win.geometry('560x680'); win.minsize(505,620)
+        win.title('UMBRA / Launcher'); win.configure(bg=BG); win.geometry('1120x660'); win.minsize(990,620)
         win.protocol('WM_DELETE_WINDOW',self.close); win.bind('<F11>',lambda _:win.attributes('-fullscreen',not win.attributes('-fullscreen'))); win.bind('<Escape>',lambda _:win.attributes('-fullscreen',False))
         style=ttk.Style(win); style.theme_use('clam'); style.configure('Umbra.Horizontal.TProgressbar',background=ACCENT,troughcolor='#27252f',bordercolor=BG,lightcolor=ACCENT,darkcolor=ACCENT,thickness=5)
-        body=tk.Frame(win,bg=BG); body.pack(fill='both',expand=True,padx=34,pady=(24,18))
-        self.label(body,'UMBRA',25,FG,bold=True).pack(anchor='w')
-        self.label(body,'Select how shaders are prepared before launch.',10,MUTED).pack(anchor='w',pady=(3,16))
+        # Artwork and controls are separate, so resizing never covers controls.
+        shell=tk.Frame(win,bg=BG); shell.pack(fill='both',expand=True)
+        left=tk.Frame(shell,bg=BG,width=505); left.pack(side='left',fill='y'); left.pack_propagate(False)
+        art=tk.Canvas(shell,bg='#17151f',highlightthickness=0); art.pack(side='left',fill='both',expand=True)
+        self.art=tk.PhotoImage(file=HERE/'artwork.png'); self.art_item=art.create_image(0,0,image=self.art,anchor='nw')
+        self.art_kicker=art.create_text(30,30,anchor='se',text='TITLE PREVIEW',font=('Consolas',10,'bold'),fill='#ffffff')
+        self.art_title=art.create_text(34,0,anchor='sw',text='AMERICAS',font=('Segoe UI',36,'bold'),fill='#ffffff')
+        self.art_sub=art.create_text(38,0,anchor='sw',text='GRAPHICS RUNTIME  /  D3D12',font=('Consolas',10),fill='#e2d9ee')
+        def place_art(event):
+            w,h=event.width,event.height
+            art.coords(self.art_item,(w-self.art.width())//2, max(0,(h-self.art.height())//2))
+            art.coords(self.art_kicker,w-25,36); art.coords(self.art_title,32,h-68); art.coords(self.art_sub,38,h-39)
+        art.bind('<Configure>',place_art)
+        body=tk.Frame(left,bg=BG); body.pack(fill='both',expand=True,padx=34,pady=(20,18))
+        brand=tk.Frame(body,bg=BG); brand.pack(fill='x')
+        self.logo=tk.PhotoImage(file=HERE/'logo.png'); tk.Label(brand,image=self.logo,bg=BG).pack(side='left')
+        word=tk.Frame(brand,bg=BG); word.pack(side='left',padx=(13,0))
+        self.label(word,'Graphics runtime',13,FG,bold=True).pack(anchor='w')
+        self.label(word,'D3D12 / SHADER ENGINE',9,MUTED,mono=True).pack(anchor='w',pady=(2,0))
+        self.label(body,'Prepare to play',25,FG,bold=True).pack(anchor='w',pady=(12,0))
+        self.label(body,'Configure the graphics cache before launch.',10,MUTED).pack(anchor='w',pady=(2,16))
         self.label(body,'SHADER CACHE',9,ACCENT,mono=True,bold=True).pack(anchor='w')
         self.mode=tk.StringVar(value=args.cache_mode); self.mode_buttons=[]
         modes=tk.Frame(body,bg=BG); modes.pack(fill='x',pady=(7,12))

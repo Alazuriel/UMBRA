@@ -1,6 +1,6 @@
 # Asset policy (rule #1)
 
-**No original game assets are stored in this repository.** Everything is
+**No original game assets are stored in this repository.** The three user-provided JPEG development screenshots listed below are a deliberate exception in this separate PRIVATE repository. Everything is
 built on the user's machine from files the user supplies. The same applies
 to other titles used for testing, and to any other proprietary material.
 
@@ -58,3 +58,7 @@ user's dump), `test_titles`, and `cache_dir` for everything derived
 A follow-up commit is not enough. Rewrite history
 (`git filter-repo --path <file> --invert-paths`), force-push, and have
 everyone re-clone.
+
+## Private snapshot exceptions (2026-11-25)
+
+Only the three user-provided development JPEG screenshots under `docs/screenshots/` are allowed. No other screenshots, games, exports, game data or assets. This is a PRIVATE snapshot and images must not be published automatically.
